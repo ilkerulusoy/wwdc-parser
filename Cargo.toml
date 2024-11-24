@@ -1,0 +1,14 @@
+[package]
+name = "wwdc-parser"
+version = "0.1.0"
+authors = ["Ilker Ulusoy <ilker@ilkerulusoy.com.tr>"]
+description = "A tool to convert WWDC video pages to markdown"
+license = "MIT"
+repository = "https://github.com/ilkerulusoy/wwdc-parser"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.11", features = ["blocking"] }
+scraper = "0.17"
+html2md = "0.2"
+anyhow = "1.0"
