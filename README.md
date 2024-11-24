@@ -1,6 +1,6 @@
-# WWDC Video Parser
+# WWDC Video & Documentation Parser
 
-A command-line tool to convert WWDC video pages to markdown format.
+A command-line tool to convert WWDC video pages and Apple Developer documentation to markdown format.
 
 ## Installation
 
@@ -25,29 +25,41 @@ cargo install wwdc-parser
 
 ## Usage
 
+### For WWDC Videos
 ```bash
-wwdc-parser <video-url>
+wwdc-parser --content-type video <video-url>
 ```
 
 Example:
 ```bash
-wwdc-parser https://developer.apple.com/videos/play/wwdc2023/10087/
+wwdc-parser --content-type video https://developer.apple.com/videos/play/wwdc2024/10091/
 ```
 
-This will generate a markdown file with the video content in your current directory.
+### For Documentation Pages
+```bash
+wwdc-parser --content-type document <documentation-url>
+```
+
+Example:
+```bash
+wwdc-parser --content-type document https://developer.apple.com/documentation/groupactivities/
+```
+
+This will generate a markdown file with the content in your current directory.
 
 ## Features
 
 - Converts WWDC video pages to markdown format
-- Extracts video title, description, and content
+- Converts Apple Developer documentation to markdown format
+- Extracts titles, descriptions, and content
 - Generates clean, readable markdown files
 - Simple command-line interface
-- Automatic file naming based on video title
+- Automatic file naming based on content title
 
 ## Requirements
 
 - Rust 1.70 or higher
-- Internet connection to fetch video data
+- Internet connection to fetch content
 
 ## Building from Source
 
@@ -68,7 +80,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with Rust
 - Uses [reqwest](https://github.com/seanmonstar/reqwest) for HTTP requests
-- Inspired by WWDC video content
+- Uses [scraper](https://github.com/causal-agent/scraper) for HTML parsing
 
 ## Author
 

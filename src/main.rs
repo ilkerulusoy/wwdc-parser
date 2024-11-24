@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
-use scraper::{Html, Selector, ElementRef};  // Element trait'ini ekledik
+use scraper::{Html, Selector, ElementRef};  // Added Element trait
 use std::fs;
 use std::fmt;
+use clap::{Parser, ValueEnum};
+use headless_chrome::{Browser, LaunchOptionsBuilder};
 
 struct WWDCVideo {
     title: String,
@@ -43,7 +45,7 @@ impl fmt::Display for ResourceType {
 }
 
 impl WWDCVideo {
-    fn to_markdown(&self) -> String {
+    fn to_markdown(&self) -> MarkdownOutput {
         let mut md = String::new();
         
         // Title and URL
@@ -82,7 +84,10 @@ impl WWDCVideo {
             md.push_str(&format!("{}\n", self.transcript));
         }
 
-        md
+        MarkdownOutput {
+            content: md,
+            title: self.title.clone(),
+        }
     }
 }
 
@@ -165,7 +170,7 @@ fn parse_wwdc_video(url: &str) -> Result<WWDCVideo> {
         let url = link.value().attr("href")?;
         let title = link.text().collect::<String>();
         
-        // Basitleştirilmiş class kontrolü
+        // Simplified class check
         let classes = element.value().attr("class").unwrap_or("");
         
         let resource_type = if classes.contains("document") {
@@ -197,26 +202,250 @@ fn parse_wwdc_video(url: &str) -> Result<WWDCVideo> {
     })
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+enum ContentType {
+    Video,
+    Document,
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// URL of the WWDC content
+    url: String,
+
+    /// Type of content to parse
+    #[arg(short, long, value_enum, default_value_t = ContentType::Video)]
+    content_type: ContentType,
+}
+
 fn main() -> Result<()> {
-    // Get URL from command line arguments
-    let url = std::env::args()
-        .nth(1)
-        .context("Usage: wwdc-parser <video-url>")?;
+    let args = Args::parse();
     
-    let video = parse_wwdc_video(&url)?;
+    let markdown = match args.content_type {
+        ContentType::Video => {
+            let video = parse_wwdc_video(&args.url)?;
+            video.to_markdown()
+        }
+        ContentType::Document => {
+            let doc = parse_wwdc_document(&args.url)?;
+            doc.to_markdown()
+        }
+    };
     
-    let markdown = video.to_markdown();
-    let filename = format!("wwdc_{}.md", sanitize_filename(&video.title));
-    fs::write(&filename, markdown)?;
+    let content_type = match args.content_type {
+        ContentType::Video => "video",
+        ContentType::Document => "doc",
+    };
     
+    let filename = format!("wwdc_{}_{}.md", 
+        content_type,
+        sanitize_filename(&markdown.title)
+    );
+    
+    fs::write(&filename, markdown.content)?;
     println!("Generated markdown file: {}", filename);
     Ok(())
 }
 
 fn sanitize_filename(filename: &str) -> String {
     filename
-        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "_")
         .to_lowercase()
         .trim()
         .to_string()
+}
+
+fn parse_wwdc_document(url: &str) -> Result<WWDCDocument> {
+    // Start headless browser
+    let options = LaunchOptionsBuilder::default()
+        .headless(true)
+        .build()?;
+    
+    let browser = Browser::new(options)?;
+    let tab = browser.new_tab()?;
+    
+    // Load page and wait for JavaScript execution
+    tab.navigate_to(url)?;
+    tab.wait_until_navigated()?;
+    
+    // Wait for JavaScript to load
+    tab.wait_for_element("h1")?;
+    
+    // Get HTML content of the page
+    let html = tab.get_content()?;
+    let document = Html::parse_document(&html);
+
+    // Get main title
+    let title_selector = Selector::parse("h1").unwrap();
+    let title = document.select(&title_selector)
+        .next()
+        .context("Title not found")?
+        .text()
+        .collect::<String>();
+
+    // Get meta description
+    let desc_selector = Selector::parse("meta[name='description']").unwrap();
+    let description = document.select(&desc_selector)
+        .next()
+        .and_then(|el| el.value().attr("content"))
+        .unwrap_or_default()
+        .to_string();
+
+    // Get overview content
+    let overview_selector = Selector::parse(".content > p").unwrap();
+    let overview = document.select(&overview_selector)
+        //.next()
+        .map(|el| el.text().collect::<String>())
+        .collect::<Vec<String>>()
+        .join("\n");
+        //.unwrap_or_default();
+
+    // Get notes
+    let notes_selector = Selector::parse(".note").unwrap();
+    let notes: Vec<String> = document.select(&notes_selector)
+        .map(|note| {
+            let label = note.select(&Selector::parse(".label").unwrap())
+                .next()
+                .map(|el| el.text().collect::<String>())
+                .unwrap_or_default();
+            
+            let content = note.select(&Selector::parse("p:not(.label)").unwrap())
+                .map(|el| el.text().collect::<String>())
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            format!("{}: {}", label, content)
+        })
+        .collect();
+
+    // Get sections
+    let section_selector = Selector::parse(".contenttable-section").unwrap();
+    let mut sections = Vec::new();
+
+    for section in document.select(&section_selector) {
+        let section_title = section
+            .select(&Selector::parse(".contenttable-title").unwrap())
+            .next()
+            .map(|el| el.text().collect::<String>())
+            .unwrap_or_default();
+
+        let items = section
+            .select(&Selector::parse(".link-block").unwrap())
+            .map(|item| {
+
+                // Get title from either identifier or decorated-title
+                let title = item
+                    .select(&Selector::parse(".identifier, .decorated-title, code").unwrap())
+                    .next()
+                    .map(|el| {
+                        // Remove <wbr> tags and collect text
+                        el.text().collect::<Vec<_>>().join("")
+                            .replace("\u{200B}", "") // Remove zero-width space if any
+                    })
+                    .unwrap_or_else(|| {
+                        // Fallback to span text if no identifier/decorated-title
+                        item.select(&Selector::parse(".link span").unwrap())
+                            .next()
+                            .map(|el| el.text().collect::<Vec<_>>().join(""))
+                            .unwrap_or_default()
+                    });
+
+                DocumentItem {
+                    title,
+                    description: item.select(&Selector::parse(".content").unwrap())
+                        .next()
+                        .map(|el| el.text().collect())
+                        .unwrap_or_default(),
+                    url: item.select(&Selector::parse("a").unwrap())
+                        .next()
+                        .and_then(|el| el.value().attr("href"))
+                        .map(|href| format!("https://developer.apple.com{}", href))
+                        .unwrap_or_default(),
+                    item_type: item.select(&Selector::parse(".decorator").unwrap())
+                        .next()
+                        .map(|el| el.text().collect())
+                        .unwrap_or_else(|| "article".to_string()),
+                }
+            })
+            .collect();
+
+        sections.push(Section {
+            title: section_title,
+            items,
+        });
+    }
+
+    Ok(WWDCDocument {
+        title,
+        description,
+        overview,
+        notes,
+        sections,
+    })
+}
+
+// Add WWDCDocument struct
+struct WWDCDocument {
+    title: String,
+    description: String,
+    overview: String,
+    notes: Vec<String>,
+    sections: Vec<Section>,
+}
+
+struct Section {
+    title: String,
+    items: Vec<DocumentItem>,
+}
+
+struct DocumentItem {
+    title: String,
+    description: String,
+    url: String,
+    item_type: String,
+}
+
+// Önce yeni struct'ı ekleyelim
+struct MarkdownOutput {
+    content: String,
+    title: String,
+}
+
+impl WWDCDocument {
+    fn to_markdown(&self) -> MarkdownOutput {
+        let mut md = String::new();
+        
+        // Title and description
+        md.push_str(&format!("# {}\n\n", self.title));
+        md.push_str(&format!("{}\n\n", self.description));
+        
+        // Overview
+        md.push_str("## Overview\n");
+        md.push_str(&format!("{}\n\n", self.overview));
+        
+        // Notes
+        if !self.notes.is_empty() {
+            md.push_str("## Notes\n");
+            for note in &self.notes {
+                md.push_str(&format!("{}\n\n", note));
+            }
+        }
+        
+        // Sections
+        for section in &self.sections {
+            md.push_str(&format!("## {}\n\n", section.title));
+            
+            for item in &section.items {
+                md.push_str(&format!("### {} `{}`\n", item.item_type, item.title));
+                md.push_str(&format!("{}\n\n", item.description));
+                md.push_str(&format!("[Documentation]({})\n\n", item.url));
+            }
+        }
+        
+        MarkdownOutput {
+            content: md,
+            title: self.title.clone(),
+        }
+    }
 }
