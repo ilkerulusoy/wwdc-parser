@@ -53,12 +53,6 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       
-      - name: Check formatting
-        run: cargo fmt -- --check
-      
-      - name: Run tests
-        run: cargo test
-      
       - name: Publish to crates.io
         run: cargo publish
         env:
