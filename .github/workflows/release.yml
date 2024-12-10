@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'RELEASE*'
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get previous tag
+        id: previoustag
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          if [ -n "${{ steps.previoustag.outputs.tag }}" ]; then
+            echo "### Changes since ${{ steps.previoustag.outputs.tag }}" > RELEASE_NOTES.md
+            git log ${{ steps.previoustag.outputs.tag }}..HEAD --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+          else
+            echo "### Initial Release" > RELEASE_NOTES.md
+            git log --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+          fi
+      
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          
+  publish-crate:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Check formatting
+        run: cargo fmt -- --check
+      
+      - name: Run tests
+        run: cargo test
+      
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
