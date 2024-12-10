@@ -25,12 +25,21 @@ jobs:
       - name: Generate Release Notes
         id: release_notes
         run: |
+          echo "### Release Notes" > RELEASE_NOTES.md
           if [ -n "${{ steps.previoustag.outputs.tag }}" ]; then
-            echo "### Changes since ${{ steps.previoustag.outputs.tag }}" > RELEASE_NOTES.md
-            git log ${{ steps.previoustag.outputs.tag }}..HEAD --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+            {
+              echo "### Changes since ${{ steps.previoustag.outputs.tag }}" >> RELEASE_NOTES.md
+              git log ${{ steps.previoustag.outputs.tag }}..HEAD --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+            } || {
+              echo "No changes to document" >> RELEASE_NOTES.md
+            }
           else
-            echo "### Initial Release" > RELEASE_NOTES.md
-            git log --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+            {
+              echo "### Initial Release" >> RELEASE_NOTES.md
+              git log --pretty=format:"* %s (%h)" --reverse | grep -i "^* Merge pull request" >> RELEASE_NOTES.md
+            } || {
+              echo "Initial release - no changes to document" >> RELEASE_NOTES.md
+            }
           fi
       
       - name: Create Release
@@ -40,6 +49,62 @@ jobs:
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+
+  build-and-upload:
+    name: Build and Upload
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: wwdc-parser
+            asset_name: wwdc-parser-linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: wwdc-parser
+            asset_name: wwdc-parser-linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: wwdc-parser.exe
+            asset_name: wwdc-parser-windows-amd64.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: wwdc-parser
+            asset_name: wwdc-parser-macos-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: wwdc-parser
+            asset_name: wwdc-parser-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          
+      - name: Rename binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          mv ${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
           
   publish-crate:
     needs: create-release
